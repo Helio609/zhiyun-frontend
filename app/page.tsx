@@ -147,10 +147,17 @@ interface Message {
   isClear: boolean;
 }
 
+type SpeechRecognition =
+  // @ts-ignore
+  | typeof window.SpeechRecognition
+  // @ts-ignore
+  | typeof window.webkitSpeechRecognition;
+
 function Chat() {
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const { authToken } = useAuth();
+  const currentQuestionRef = useRef("");
   const [loading, setLoading] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [error, setError] = useState(false);
@@ -158,23 +165,9 @@ function Chat() {
   const [chatId, setChatId] = useState(0);
   const [currentAns, setCurrentAns] = useState("");
   const currentAnsRef = useRef("");
-  const audioChunksRef = useRef<Blob[]>([]);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      message: "Test",
-      isUser: true,
-      isClear: false,
-    },
-    {
-      message: "Test",
-      isUser: false,
-      isClear: false,
-    },
-  ]);
+  const [messages, setMessages] = useState<Message[]>([]);
 
   const [needClear, setNeedClear] = useState(false);
   const handleClearMemory = () => {
@@ -188,12 +181,17 @@ function Chat() {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
-      }).then((v) => {
-        if (v.status == 200) {
-          setChatId(v.data["data"]["chatId"]);
-          console.log(v.data["data"]["chatId"]);
-        }
-      });
+      })
+        .then((v) => {
+          if (v.status == 200) {
+            setChatId(v.data["data"]["chatId"]);
+            console.log(v.data["data"]["chatId"]);
+          }
+        })
+        .catch((e) => {
+          setError(true);
+          setErrorMessage(e.message);
+        });
     }
   };
 
@@ -217,11 +215,16 @@ function Chat() {
         headers: {
           Authorization: `Bearer ${authToken}`,
         },
-      }).then((v) => {
-        if (v.status == 200) {
-          setChatId(v.data["data"]["chatId"]);
-        }
-      });
+      })
+        .then((v) => {
+          if (v.status == 200) {
+            setChatId(v.data["data"]["chatId"]);
+          }
+        })
+        .catch((e) => {
+          setError(true);
+          setErrorMessage(e.message);
+        });
     }
   }, [authToken]);
 
@@ -235,8 +238,7 @@ function Chat() {
 
     const message = inputRef.current.value;
 
-    // 添加用户对话
-    setMessages([...messages, { message, isUser: true, isClear: false }]);
+    currentQuestionRef.current = message;
 
     // 清空对话框
     inputRef.current.value = "";
@@ -263,6 +265,12 @@ function Chat() {
       },
       onclose() {
         setIsTyping(false);
+        // 添加用户对话
+        setMessages((prevMessages) => [
+          ...prevMessages,
+          { message, isUser: true, isClear: false },
+        ]);
+        // 添加会话
         setMessages((prevMessages) => [
           ...prevMessages,
           { message: currentAnsRef.current, isUser: false, isClear: false },
@@ -272,173 +280,52 @@ function Chat() {
         setIsTyping(false);
         setLoading(false);
         setError(err);
-        console.log(err);
       },
     });
   }
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+  useEffect(() => {
+    // 检查浏览器是否支持 Web Speech API
+    if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
+      const SpeechRecognition =
+        // @ts-ignore
+        (window as any).webkitSpeechRecognition || window.SpeechRecognition;
+      const recognition = new SpeechRecognition();
 
-      recorder.ondataavailable = (event: BlobEvent) => {
-        audioChunksRef.current.push(event.data);
-      };
+      recognition.lang = "zh-CN"; // 设置语言为中文
+      recognition.interimResults = false; // 禁用中间结果
+      recognition.maxAlternatives = 1; // 返回一个最佳匹配的结果
 
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-
-      // 初始化 Web Audio API
-      if (!audioContextRef.current) {
-        audioContextRef.current = new AudioContext();
-      }
-      const audioContext = audioContextRef.current;
-
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-      processor.onaudioprocess = (event) => {
-        const inputBuffer = event.inputBuffer;
-        const audioData = inputBuffer.getChannelData(0);
-        // 处理音频数据，例如存储到一个数组中
-      };
-      source.connect(processor);
-      processor.connect(audioContext.destination);
-      scriptProcessorRef.current = processor;
-    } catch (err) {
-      console.error("Error accessing microphone:", err);
-    }
-  };
-
-  // WAV 数据编码
-  const encodeWAV = (samples: Float32Array, sampleRate: number) => {
-    const numChannels = 1;
-    const bytesPerSample = 2;
-    const blockAlign = numChannels * bytesPerSample;
-    const subchunk2Size = samples.length * bytesPerSample;
-    const chunkSize = 36 + subchunk2Size;
-
-    const buffer = new ArrayBuffer(44 + subchunk2Size);
-    const view = new DataView(buffer);
-
-    // RIFF chunk descriptor
-    view.setUint8(0, 82); // 'R'
-    view.setUint8(1, 73); // 'I'
-    view.setUint8(2, 70); // 'F'
-    view.setUint8(3, 70); // 'F'
-    view.setUint32(4, chunkSize, true);
-    view.setUint8(8, 87); // 'W'
-    view.setUint8(9, 65); // 'A'
-    view.setUint8(10, 86); // 'V'
-    view.setUint8(11, 69); // 'E'
-
-    // fmt sub-chunk
-    view.setUint8(12, 102); // 'f'
-    view.setUint8(13, 109); // 'm'
-    view.setUint8(14, 116); // 't'
-    view.setUint8(15, 32); // ' '
-    view.setUint32(16, 16, true); // subchunk1 size (16 for PCM)
-    view.setUint16(20, 1, true); // audio format (1 for PCM)
-    view.setUint16(22, numChannels, true); // number of channels
-    view.setUint32(24, sampleRate, true); // sample rate
-    view.setUint32(28, sampleRate * blockAlign, true); // byte rate
-    view.setUint16(32, blockAlign, true); // block align
-    view.setUint16(34, bytesPerSample * 8, true); // bits per sample
-
-    // data sub-chunk
-    view.setUint8(36, 100); // 'd'
-    view.setUint8(37, 97); // 'a'
-    view.setUint8(38, 116); // 't'
-    view.setUint8(39, 97); // 'a'
-    view.setUint32(40, subchunk2Size, true);
-
-    // Write audio samples
-    let offset = 44;
-    for (let i = 0; i < samples.length; i++) {
-      const sample = Math.max(-1, Math.min(1, samples[i]));
-      view.setInt16(
-        offset,
-        sample < 0 ? sample * 0x8000 : sample * 0x7fff,
-        true
-      );
-      offset += 2;
-    }
-
-    return new Blob([view], { type: "audio/wav" });
-  };
-
-  // 停止录音并转换为 Base64
-  const stopRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      mediaRecorderRef.current.onstop = () => {
-        if (audioChunksRef.current.length > 0) {
-          const audioBlob = new Blob(audioChunksRef.current, {
-            type: "audio/webm",
-          });
-          const reader = new FileReader();
-
-          reader.readAsArrayBuffer(audioBlob);
-          reader.onloadend = () => {
-            const audioContext = audioContextRef.current;
-            if (!audioContext) return;
-
-            audioContext.decodeAudioData(
-              reader.result as ArrayBuffer,
-              (buffer) => {
-                const sampleRate = 16000; // 需要调整采样率
-                const numChannels = 1; // 单通道
-
-                // 将解码后的数据转换为 WAV 格式
-                const wavBlob = encodeWAV(buffer.getChannelData(0), sampleRate);
-                const readerWav = new FileReader();
-
-                readerWav.readAsDataURL(wavBlob);
-                readerWav.onloadend = () => {
-                  const base64Audio = readerWav.result as string;
-                  console.log(base64Audio);
-                  console.log(wavBlob.size);
-                  axios({
-                    method: "POST",
-                    url: "https://vop.baidu.com/server_api",
-                    headers: {
-                      "Content-Type": "application/json",
-                      Accept: "application/json",
-                    },
-                    data: JSON.stringify({
-                      format: "wav",
-                      rate: 16000,
-                      channel: 1,
-                      cuid: "cQhm6d0k265qiWAFe0dCHmKbRmIdJvG0",
-                      speech: base64Audio.slice(22),
-                      len: wavBlob.size,
-                      token:
-                        "24.657646ce6162448501bf27a1324f93f7.2592000.1728921225.282335-115593052",
-                    }),
-                  }).then((v) => {
-                    console.log(v);
-                  });
-                  // 清空音频数据
-                  audioChunksRef.current = [];
-                };
-
-                readerWav.onerror = (error) => {
-                  console.error("FileReader error: ", error);
-                };
-              },
-              (error) => {
-                console.error("Audio decoding error: ", error);
-              }
-            );
-          };
-
-          reader.onerror = (error) => {
-            console.error("FileReader error: ", error);
-          };
-        } else {
-          console.warn("No audio data recorded.");
+      // @ts-ignore
+      recognition.onresult = (event: SpeechRecognitionEvent) => {
+        const transcriptResult = event.results[0][0].transcript;
+        console.log("Transcript:", transcriptResult); // 输出到控制台
+        console.log(inputRef.current);
+        if (inputRef.current) {
+          inputRef.current.value = transcriptResult;
+          console.log(inputRef.current.value);
         }
       };
+      // @ts-ignore
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        console.error("Speech recognition error:", event.error);
+      };
+
+      recognitionRef.current = recognition;
+    } else {
+      console.error("Web Speech API not supported in this browser.");
+    }
+  }, []);
+
+  const handleMouseDown = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.start();
+    }
+  };
+
+  const handleMouseUp = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
     }
   };
 
@@ -457,13 +344,24 @@ function Chat() {
       {isTyping && <ChatDialog message={currentAns} isUser={false} />}
 
       {loading && <Loading />}
-      {error && <ErrorBox error={errorMessage} onRetry={() => {}} />}
+      {error && (
+        <ErrorBox
+          error={errorMessage}
+          onRetry={() => {
+            if (inputRef.current) {
+              inputRef.current.value = currentQuestionRef.current;
+              setError(false);
+              handleQuestion();
+            }
+          }}
+        />
+      )}
       <div className="rounded-full bg-white py-2 px-2 sm:px-4 shadow-2xl my-4 md:my-8 lg:my-16 flex-row flex w-full">
         <button
           className="rounded-full bg-[#B09687] py-2 px-4 sm:px-6 md:px-8 text-white text-sm sm:text-base md:text-xl md:tracking-widest text-nowrap disabled:opacity-50"
           disabled={loading || isTyping || !authToken}
-          onMouseDown={startRecording}
-          onMouseUp={stopRecording}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
         >
           <FontAwesomeIcon icon={faMicrophoneLines} className="sm:mr-2" />
         </button>
