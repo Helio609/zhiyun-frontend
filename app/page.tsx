@@ -252,6 +252,7 @@ function Chat() {
       body: JSON.stringify({
         chatId,
         query: message,
+        type: "text",
       }),
       async onopen() {
         setCurrentAns("");
