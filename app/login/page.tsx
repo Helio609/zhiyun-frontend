@@ -43,6 +43,41 @@ export default function LoginPage() {
     });
   };
 
+  const handleRegister = (e: FormEvent) => {
+    e.preventDefault();
+    const username = usernameRef?.current?.value;
+    const password = passwordRef?.current?.value;
+
+    if (!username || !password) return;
+    console.log(username);
+
+    fetch(`${process.env.NEXT_PUBLIC_API_URL}/auth/register`, {
+      method: "POST",
+      body: JSON.stringify({
+        avatar: "",
+        email: "",
+        nickName: username,
+        password: password,
+        phone: "",
+        qq: "",
+        sex: "男",
+        userName: username,
+        wx: "",
+      }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+    }).then(async (v) => {
+      if (v.status != 200) {
+        // TODO
+        return;
+      }
+
+      // 注册成功直接触发登录流程
+      handleLogin(e);
+    });
+  };
+
   return (
     <div className="relative overflow-hidden">
       <header>
@@ -125,13 +160,16 @@ export default function LoginPage() {
             </div>
             <div className="flex w-full justify-between">
               <button
-                type="submit"
+                onClick={handleLogin}
                 className="rounded-full bg-[#B09687] py-2 px-4 sm:px-6 md:px-8 text-white text-sm sm:text-base md:text-xl md:tracking-widest text-nowrap disabled:opacity-50"
               >
                 登录
               </button>
 
-              <button className="rounded-full bg-[#84766e] py-2 px-4 sm:px-6 md:px-8 text-white text-sm sm:text-base md:text-xl md:tracking-widest text-nowrap disabled:opacity-50">
+              <button
+                onClick={handleRegister}
+                className="rounded-full bg-[#84766e] py-2 px-4 sm:px-6 md:px-8 text-white text-sm sm:text-base md:text-xl md:tracking-widest text-nowrap disabled:opacity-50"
+              >
                 注册
               </button>
             </div>
