@@ -8,10 +8,12 @@ import {
   faMicrophoneLines,
   faRotateLeft,
   faUser,
+  faVolumeUp,
 } from "@fortawesome/free-solid-svg-icons";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { fetchEventSource } from "@microsoft/fetch-event-source";
 import axios from "axios";
+import Recorder from "js-audio-recorder";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
@@ -27,6 +29,43 @@ function ChatDialog({
   isClearMemory?: boolean;
   isThinking?: boolean;
 }) {
+  const [isLoading, setIsLoading] = useState<boolean>(false); // 请求状态
+
+  // 点击按钮触发文字转语音
+  const handleOnClick = async (message: string) => {
+    if (!message.trim()) {
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_ST_API_URL}/synthesize`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ content: message }), // 发送消息到后端
+        }
+      );
+
+      if (response.ok) {
+        const audioBlob = await response.blob(); // 获取返回的音频文件（音频流）
+        const audioUrl = URL.createObjectURL(audioBlob); // 创建音频 URL
+        const audio = new Audio(audioUrl); // 创建音频对象
+        audio.play(); // 播放音频
+      } else {
+        console.error("Failed to synthesize speech:", response.status);
+      }
+    } catch (error) {
+      console.error("Error during API request", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}>
       <div>
@@ -63,7 +102,7 @@ function ChatDialog({
         </div>
 
         <div
-          className={`px-4 min-h-10 whitespace-pre-wrap break-words py-2 sm:py-2.5 sm:px-5 rounded-3xl mx-8 ${
+          className={`flex flex-row items-center justify-center gap-4 px-4 min-h-10 whitespace-pre-wrap break-words py-2 sm:py-2.5 sm:px-5 rounded-3xl mx-8 ${
             isUser
               ? "rounded-tr-lg bg-[#FDE3D4]"
               : "rounded-tl-lg bg-gray-50 border border-gray-200"
@@ -76,6 +115,9 @@ function ChatDialog({
           >
             {isClearMemory ? "记忆已清除" : message}
           </Markdown>
+          <button onClick={() => handleOnClick(message)} disabled={isLoading}>
+            <FontAwesomeIcon icon={faVolumeUp} />
+          </button>
         </div>
       </div>
     </div>
@@ -285,48 +327,65 @@ function Chat() {
     });
   }
 
-  useEffect(() => {
-    // 检查浏览器是否支持 Web Speech API
-    if ("webkitSpeechRecognition" in window || "SpeechRecognition" in window) {
-      const SpeechRecognition =
-        // @ts-ignore
-        (window as any).webkitSpeechRecognition || window.SpeechRecognition;
-      const recognition = new SpeechRecognition();
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioData, setAudioData] = useState<Uint8Array | null>(null);
 
-      recognition.lang = "zh-CN"; // 设置语言为中文
-      recognition.interimResults = false; // 禁用中间结果
-      recognition.maxAlternatives = 1; // 返回一个最佳匹配的结果
+  // 创建录音实例
+  const recorderRef = useRef<Recorder | null>(null);
 
-      // @ts-ignore
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        const transcriptResult = event.results[0][0].transcript;
-        console.log("Transcript:", transcriptResult); // 输出到控制台
-        console.log(inputRef.current);
-        if (inputRef.current) {
-          inputRef.current.value = transcriptResult;
-          console.log(inputRef.current.value);
-        }
-      };
-      // @ts-ignore
-      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
-        console.error("Speech recognition error:", event.error);
-      };
+  // 录音开始时
+  const handleMouseDown = async () => {
+    if (isRecording) return;
+    setIsRecording(true);
 
-      recognitionRef.current = recognition;
-    } else {
-      console.error("Web Speech API not supported in this browser.");
-    }
-  }, []);
+    try {
+      // 初始化音频录制器并请求麦克风权限
+      recorderRef.current = new Recorder({
+        sampleBits: 16,
+        sampleRate: 16000,
+        numChannels: 1,
+      });
 
-  const handleMouseDown = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.start();
+      // 开始录制
+      await recorderRef.current.start();
+    } catch (err) {
+      console.error("无法访问麦克风", err);
+      setIsRecording(false);
     }
   };
 
+  // 录音停止时
   const handleMouseUp = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
+    if (!isRecording) return;
+    setIsRecording(false);
+
+    // 停止录音并获取音频数据
+    recorderRef.current?.stop();
+    recorderRef.current?.getPCMBlob();
+    sendAudioToBackend(recorderRef.current?.getPCMBlob());
+  };
+
+  // 发送音频数据到后端
+  const sendAudioToBackend = async (pcmData: Blob) => {
+    const formData = new FormData();
+    formData.append("file", pcmData, "audio.pcm");
+
+    try {
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_ST_API_URL}/recognize`,
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      const data = await response.json();
+      console.log("识别结果:", data.content);
+      if (inputRef.current) {
+        inputRef.current.value = data.content;
+      }
+    } catch (err) {
+      console.error("发送音频到后端失败", err);
     }
   };
 
@@ -360,7 +419,7 @@ function Chat() {
       <div className="rounded-full bg-white py-2 px-2 sm:px-4 shadow-2xl my-4 md:my-8 lg:my-16 flex-row flex w-full">
         <button
           className="rounded-full bg-[#B09687] py-2 px-4 sm:px-6 md:px-8 text-white text-sm sm:text-base md:text-xl md:tracking-widest text-nowrap disabled:opacity-50"
-          disabled={loading || isTyping || !authToken}
+          disabled={loading || isTyping || !authToken || isRecording}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
         >
