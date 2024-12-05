@@ -328,7 +328,6 @@ function Chat() {
   }
 
   const [isRecording, setIsRecording] = useState(false);
-  const [audioData, setAudioData] = useState<Uint8Array | null>(null);
 
   // 创建录音实例
   const recorderRef = useRef<Recorder | null>(null);
@@ -379,6 +378,11 @@ function Chat() {
         }
       );
 
+      if (response.status != 200) {
+        console.error("发送音频到后端失败", response.statusText);
+        return;
+      }
+
       const data = await response.json();
       console.log("识别结果:", data.content);
       if (inputRef.current) {
@@ -419,7 +423,8 @@ function Chat() {
       <div className="rounded-full bg-white py-2 px-2 sm:px-4 shadow-2xl my-4 md:my-8 lg:my-16 flex-row flex w-full">
         <button
           className="rounded-full bg-[#B09687] py-2 px-4 sm:px-6 md:px-8 text-white text-sm sm:text-base md:text-xl md:tracking-widest text-nowrap disabled:opacity-50"
-          disabled={loading || isTyping || !authToken || isRecording}
+          // disabled={loading || isTyping}
+          disabled={loading || isTyping || !authToken}
           onMouseDown={handleMouseDown}
           onMouseUp={handleMouseUp}
         >
